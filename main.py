@@ -1,62 +1,91 @@
-from fastapi import FastAPI, HTTPException, status
-from models import UserCreate, UserUpdate, UserOut
-from db import db
-from bson import ObjectId
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from db import Base, engine, get_db
+from models import User, UserCreate, UserOut, UserUpdate
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
 
 @app.get("/")
 def root():
     return {"message": "Hello, World!"}
 
-@app.post("/users/", status_code=status.HTTP_201_CREATED)
-async def create_user(user: UserCreate):
-    existing_user = await db.users.find_one({"email": user.email})
+
+@app.post("/users/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == user.email).first()
     if existing_user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
 
-    result = await db.users.insert_one(user.dict())
-    return {
-        "id": str(result.inserted_id),
-        **user.dict()
-    }
-@app.get("/users/{id}")
-async def get_user(id: str):
-    user = await db.users.find_one({"_id": ObjectId(id)})
+    new_user = User(**user.model_dump())
+    db.add(new_user)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        ) from None
+
+    db.refresh(new_user)
+    return new_user
+
+
+@app.get("/users/{id}", response_model=UserOut)
+def get_user(id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == id).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
-    user["id"] = str(user["_id"])
-    del user["_id"]
     return user
 
-@app.get("/users/")
-async def list_users():
-    users=[]
-    cursor = db.users.find({})
-    async for user in cursor:
-        user["id"] = str(user["_id"])
-        del user["_id"]
-        users.append(user)
 
-    return users
+@app.get("/users/", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
+
 
 @app.put("/users/{id}")
-async def update_user(id: str, user: UserUpdate):
-    result = await db.users.update_one(
-        {"_id": ObjectId(id)},
-        {"$set": {k: v for k, v in user.dict().items() if v is not None}}
-    )
-
-    if result.matched_count == 0:
+def update_user(id: int, user: UserUpdate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.id == id).first()
+    if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    update_data = user.model_dump(exclude_none=True)
+    if "email" in update_data and update_data["email"] != db_user.email:
+        existing_email = (
+            db.query(User)
+            .filter(User.email == update_data["email"], User.id != id)
+            .first()
+        )
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    for key, value in update_data.items():
+        setattr(db_user, key, value)
+
+    db.commit()
     return {"msg": "updated"}
-@app.delete("/users/{id}")
-async def delete_user(id: str):
-    result = await db.users.delete_one({"_id": ObjectId(id)})
 
-    if result.deleted_count == 0:
+
+@app.delete("/users/{id}")
+def delete_user(id: int, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.id == id).first()
+    if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    db.delete(db_user)
+    db.commit()
     return {"msg": "deleted"}
