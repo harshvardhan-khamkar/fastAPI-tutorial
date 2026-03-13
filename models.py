@@ -30,3 +30,21 @@ class UserOut(BaseModel):
     email: EmailStr
 
     model_config = ConfigDict(from_attributes=True)
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(200), nullable=False)
+    content = Column(String(1000), nullable=False)
+
+class PostCreate(BaseModel):
+    title: str
+    content: str
+
+class PostOut(BaseModel):
+    id: int
+    title: str
+    content: str
+
+    model_config = ConfigDict(from_attributes=True)

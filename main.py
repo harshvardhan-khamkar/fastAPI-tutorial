@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db import Base, engine, get_db
-from models import User, UserCreate, UserOut, UserUpdate
+from models import Post, PostCreate, PostOut, User, UserCreate, UserOut, UserUpdate
 
 Base.metadata.create_all(bind=engine)
 
@@ -89,3 +89,15 @@ def delete_user(id: int, db: Session = Depends(get_db)):
     db.delete(db_user)
     db.commit()
     return {"msg": "deleted"}
+
+@app.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+def create_post(post: PostCreate, db: Session = Depends(get_db)):
+    new_post = Post(**post.model_dump())
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
+
+@app.get("/posts", response_model=list[PostOut])
+def list_posts(db: Session = Depends(get_db)):
+    return db.query(Post).all()
